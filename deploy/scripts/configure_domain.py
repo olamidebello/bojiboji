@@ -161,6 +161,70 @@ def reusable_certificate(dump,domain):
     return None
 
 
+
+def listen_key(value):
+    if value.isdigit():return ('0.0.0.0',int(value))
+    bracket=re.fullmatch(r'\[([^]]+)\]:(\d+)',value)
+    if bracket:
+        return (str(ipaddress.ip_address(bracket.group(1))),int(bracket.group(2)))
+    if ':' in value:
+        address,port=value.rsplit(':',1)
+        if port.isdigit():
+            if address=='*':address='0.0.0.0'
+            try:return (str(ipaddress.ip_address(address)),int(port))
+            except ValueError:return None
+    return None
+
+
+def listener_groups(dump,port):
+    groups={}
+    for _,text in config_sections(dump):
+        for node in blocks(text):
+            if node['head']!=['server'] or not any(d and d[0]=='server_name' for d in node['directives']):continue
+            if port==80 and not any(d and d[0]=='listen' for d in node['directives']):
+                groups.setdefault(('0.0.0.0',80),set())
+            for directive in node['directives']:
+                if len(directive)<2 or directive[0]!='listen' or any(option in directive for option in ['udp','quic']):continue
+                key=listen_key(directive[1])
+                if key is None or key[1]!=port:continue
+                # Join existing socket groups without copying default-server or bind options.
+                options={o for o in directive[2:] if o in ['ssl','http2','proxy_protocol']}
+                groups.setdefault(key,set()).update(options)
+    if not groups:groups[('0.0.0.0',port)]=set()
+    return groups
+
+
+def listen_line(key,options,tls=False):
+    address,port=key
+    endpoint=str(port) if address=='0.0.0.0' else ('['+address+']:'+str(port) if ':' in address else address+':'+str(port))
+    flags=set(options)
+    if tls:flags.add('ssl')
+    return '    listen '+endpoint+''.join(' '+o for o in ['ssl','http2','proxy_protocol'] if o in flags)+';\n'
+
+
+def listen_lines(dump,port,tls=False):
+    return ''.join(listen_line(key,opts,tls) for key,opts in sorted(listener_groups(dump,port).items()))
+
+
+def repair_listener_membership(text,dump,domain):
+    additions=[]
+    for server in blocks(text):
+        if server['head']!=['server']:continue
+        names=[n for d in server['directives'] if d and d[0]=='server_name' for n in d[1:]]
+        if set(names)!={domain}:continue
+        listeners=[d for d in server['directives'] if len(d)>1 and d[0]=='listen']
+        existing={listen_key(d[1]) for d in listeners}
+        if not listeners:
+            existing={('0.0.0.0',80)}
+            additions.append((server['open'],'    listen 80;\n'))
+        ports={key[1] for key in existing if key and key[1] in [80,443]}
+        for port in ports:
+            tls=any(listen_key(d[1]) and listen_key(d[1])[1]==port and 'ssl' in d[2:] for d in listeners)
+            missing=''.join(listen_line(key,opts,tls) for key,opts in sorted(listener_groups(dump,port).items()) if key not in existing)
+            if missing:additions.append((server['open'],missing))
+    for offset,value in sorted(additions,reverse=True):text=text[:offset]+'\n'+value+text[offset:]
+    return text
+
 def provision_missing(dump,domain,snippet):
     directories=[]
     filename='bojiboji-'+domain+'.conf'
@@ -193,10 +257,10 @@ def provision_missing(dump,domain,snippet):
             if '\n' in value or '\r' in value:
                 raise ValueError('Invalid certificate path')
             return '"'+value.replace('\\','\\\\').replace('"','\\"')+'"'
-        text=(header+'server {\n    listen 80;\n    server_name '+domain+';\n    return 301 https://'+domain+'$request_uri;\n}\n'
-              +'server {\n    listen 443 ssl;\n    server_name '+domain+';\n    ssl_certificate '+quote(tls[0])+';\n    ssl_certificate_key '+quote(tls[1])+';\n    ssl_protocols TLSv1.2 TLSv1.3;\n'+game+'\n}\n')
+        text=(header+'server {\n'+listen_lines(dump,80)+'    server_name '+domain+';\n    return 301 https://'+domain+'$request_uri;\n}\n'
+              +'server {\n'+listen_lines(dump,443,tls=True)+'    server_name '+domain+';\n    ssl_certificate '+quote(tls[0])+';\n    ssl_certificate_key '+quote(tls[1])+';\n    ssl_protocols TLSv1.2 TLSv1.3;\n'+game+'\n}\n')
     else:
-        text=header+'# HTTP only: enable a certificate in the panel before using HTTPS.\nserver {\n    listen 80;\n    server_name '+domain+';\n'+game+'\n}\n'
+        text=header+'# HTTP only: enable a certificate in the panel before using HTTPS.\nserver {\n'+listen_lines(dump,80)+'    server_name '+domain+';\n'+game+'\n}\n'
     return target,text,bool(tls)
 
 
@@ -273,7 +337,8 @@ def main():
         if target in updates:
             continue
         original=target.read_text()
-        updated,count,routes=rewrite(original,args.domain,snippet)
+        aligned=repair_listener_membership(original,dump,args.domain)
+        updated,count,routes=rewrite(aligned,args.domain,snippet)
         matched+=count
         routed+=routes
         if routes and updated!=original:

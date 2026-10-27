@@ -108,4 +108,45 @@ class RoutingDiagnosticsTests(unittest.TestCase):
   with patch.object(m,'command',side_effect=mock_command),patch.object(m.http.client,'HTTPConnection',return_value=connection):
    result=m.diagnose(dump,D,'/usr/sbin/nginx','nginx')
   self.assertEqual({p['address'] for p in result['probes']},{'127.0.0.1','154.16.170.86'});self.assertEqual(result['server_count'],2);self.assertEqual(result['mode'],'read-only diagnosis')
+class ExplicitAddressRegressionTests(unittest.TestCase):
+ def live_layout(self,folder):
+  return f'''# configuration file /etc/nginx/nginx.conf:
+http {{ include {folder}/*.conf; }}
+# configuration file /etc/nginx/sprintforge-managed.conf:
+server {{
+ server_name sprintforge.netwizzard.tech;
+ listen 80;
+ listen 127.0.0.1:80;
+ listen 154.16.170.86:80;
+ listen 172.17.0.1:80;
+ listen 172.18.0.1:80;
+ listen [::]:80;
+ listen [::1]:80;
+}}
+# configuration file /etc/nginx/sites-enabled/default:
+server {{ server_name _; listen 80 default_server; listen [::]:80 default_server; }}
+'''
+ def test_new_domain_joins_every_observed_http_address_group(self):
+  with tempfile.TemporaryDirectory() as folder:
+   dump=self.live_layout(folder)
+   with patch.object(m,'reusable_certificate',return_value=None):_,text,tls=m.provision_missing(dump,D,SNIPPET)
+   for address in ['80','127.0.0.1:80','154.16.170.86:80','172.17.0.1:80','172.18.0.1:80','[::]:80','[::1]:80']:
+    self.assertIn('listen '+address+';',text)
+   self.assertNotIn('default_server',text);self.assertNotIn('sprintforge',text);self.assertFalse(tls)
+ def test_existing_domain_repair_is_scoped_and_idempotent(self):
+  src=f'server {{ server_name {D}; listen 80; location / {{ proxy_pass http://127.0.0.1:3087; }} }}\nserver {{ server_name unrelated.example; listen 80; return 404; }}'
+  dump=self.live_layout('/etc/nginx/conf.d')
+  updated=m.repair_listener_membership(src,dump,D)
+  self.assertIn('listen 154.16.170.86:80;',updated);self.assertIn('listen 127.0.0.1:80;',updated)
+  self.assertIn('server_name unrelated.example; listen 80; return 404;',updated)
+  self.assertEqual(m.repair_listener_membership(updated,dump,D),updated)
+ def test_tls_joins_only_tls_port_groups_not_new_specific_addresses(self):
+  dump=self.live_layout('/etc/nginx/conf.d')+'\n# configuration file /etc/nginx/sites-enabled/ssl:\nserver { server_name tls.example; listen 443 ssl default_server; listen 154.16.170.86:443 ssl; }'
+  lines=m.listen_lines(dump,443,tls=True)
+  self.assertIn('listen 443 ssl;',lines);self.assertIn('listen 154.16.170.86:443 ssl;',lines)
+  self.assertNotIn('172.17.0.1:443',lines);self.assertNotIn('default_server',lines)
+ def test_implicit_wildcard_is_retained_during_existing_domain_repair(self):
+  dump=self.live_layout('/etc/nginx/conf.d');src=f'server {{ server_name {D}; }}'
+  updated=m.repair_listener_membership(src,dump,D)
+  self.assertIn('listen 80;',updated);self.assertIn('listen 127.0.0.1:80;',updated)
 if __name__=='__main__':unittest.main()

@@ -131,3 +131,18 @@ python3 /root/bojiboji-deploy/deploy/scripts/configure_domain.py --diagnose
 ```
 
 It lists the active HTTP listener groups, virtual-host names and configuration paths, checks `/healthz` with the chosen Host header on local/configured IPv4 addresses, and shows the Nginx service's ExecStart. It does not edit files, reload services, resolve the public domain to arbitrary remote hosts, or print TLS private-key contents. The diagnostic does not claim a repair has occurred; use its output to identify the actual listener or redirect mismatch.
+
+### Explicit listener groups redirecting Bojiboji to Sprintforge
+
+The supplied server diagnosis showed `sprintforge-managed.conf` participating in wildcard, loopback, public-IP, Docker-bridge and IPv6 HTTP listener groups, while a newly provisioned Bojiboji host used only `listen 80`. Nginx selects an address/port group before matching Host, so the exact game hostname must participate in the corresponding existing groups too. Reference: https://nginx.org/en/docs/http/request_processing.html
+
+The helper now discovers existing HTTP listener address groups and joins them in the Bojiboji virtual host. It handles the observed `127.0.0.1:80`, `154.16.170.86:80`, `172.17.0.1:80`, `172.18.0.1:80`, `[::]:80`, and `[::1]:80` addresses dynamically, without hardcoding the server's IP into the helper. It preserves implicit wildcard membership and does not copy `default_server`, bind, or socket-tuning flags. It also repairs missing memberships on existing dedicated Bojiboji hosts without changing other domains. TLS, if enabled, joins groups already on port 443 rather than inventing new specific-address groups that could shadow other HTTPS sites.
+
+After pulling the update, rerun `deploy/configure-domain.yml`. Check both loopback and the server's public IP with the Bojiboji Host header:
+
+```bash
+curl --fail -H 'Host: bojiboji.africandroid.world' http://127.0.0.1/healthz
+curl --fail -H 'Host: bojiboji.africandroid.world' http://154.16.170.86/healthz
+```
+
+HTTP-only installations should return the Bojiboji JSON health response. If a matching existing certificate was reused, a redirect to the same Bojiboji HTTPS hostname is expected instead; verify `https://bojiboji.africandroid.world/healthz` to check the final HTTPS route and certificate.
