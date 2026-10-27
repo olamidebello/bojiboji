@@ -1,0 +1,6 @@
+all:
+  children:
+    olamidepanel:
+      hosts:
+        localhost:
+          ansible_connection: local

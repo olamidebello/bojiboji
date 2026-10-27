@@ -56,3 +56,17 @@ node tests/ui.cjs
 ```
 
 The UI check uses a mock DOM/canvas to exercise script loading, avatars, rendering calls, room controls, invitations and result statistics. It does not replace browser screenshot or mobile-device testing. Those remain pending.
+
+## Olamidepanel deployment
+
+See [deploy/README.md](deploy/README.md) for the Ansible playbook, local deployment helper, remote inventory, isolated Node.js runtime, systemd service, health checks, rollback behavior, and domain reverse-proxy setup. The service uses loopback port 3087 by default. `GET /healthz` returns a small JSON health response.
+
+## Terms, privacy, and ownership
+
+Legal pages are served at `/legal/terms.html`, `/legal/privacy.html`, and `/legal/copyright.html`, with links in the footer and near room controls. Copyright: **© 2026 Olamide Olatayo Bello. All rights reserved.** See `LICENSE` for the proprietary notice and its exceptions for user content, third-party rights, and applicable law.
+
+Players can delete their own shared hiding profile, leave a room to remove it, and clear locally saved preferences and personal statistics. No unconfigured support email is assumed. Set `BOJIBOJI_CONTACT_EMAIL` for direct Node.js hosting, or `bojiboji_contact_email` in the deployment variables, to publish the operator's contact email on legal pages. `/site-config` exposes only that intentionally public value.
+
+Privacy text was matched to the application's current data flow. Reference: [FTC privacy and security guidance](https://www.ftc.gov/business-guidance/privacy-security). This reference is informational, not an endorsement or certification.
+
+Additional checks: `node tests/privacy.cjs` and `node tests/privacy-server.cjs`.

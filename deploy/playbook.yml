@@ -1,0 +1,278 @@
+---
+- name: Pull and deploy Bojiboji on Olamidepanel
+  hosts: olamidepanel
+  become: true
+  gather_facts: true
+  serial: 1
+  vars:
+    bojiboji_repo: https://github.com/olamidebello/bojiboji.git
+    bojiboji_ref: main
+    bojiboji_root: /opt/bojiboji
+    bojiboji_port: 3087
+    bojiboji_install_node: true
+    bojiboji_existing_node: /usr/bin/node
+    bojiboji_contact_email: ''
+    bojiboji_arches:
+      x86_64: x64
+      aarch64: arm64
+  tasks:
+    - name: Validate supported server and settings
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+          - ansible_service_mgr == 'systemd'
+          - bojiboji_port | int > 1024
+          - bojiboji_port | int < 65536
+          - bojiboji_root == '/opt/bojiboji'
+          - bojiboji_contact_email == '' or bojiboji_contact_email is match('^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,63}$')
+          - not (bojiboji_install_node | bool) or ansible_architecture in bojiboji_arches
+        fail_msg: Use a Debian/Ubuntu systemd server, a supported architecture, and a free port above 1024.
+
+    - name: Install deployment prerequisites
+      ansible.builtin.apt:
+        name: [git, ca-certificates, xz-utils, tar]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create application account
+      ansible.builtin.user:
+        name: bojiboji
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
+
+    - name: Create deployment directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - "{{ bojiboji_root }}"
+        - "{{ bojiboji_root }}/releases"
+        - "{{ bojiboji_root }}/downloads"
+        - /etc/bojiboji
+
+    - name: Install isolated maintained Node.js 22 runtime
+      when: bojiboji_install_node | bool
+      block:
+        - name: Get official Node.js checksums
+          ansible.builtin.uri:
+            url: https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt
+            return_content: true
+            validate_certs: true
+          register: bojiboji_checksums
+
+        - name: Select native Linux archive
+          ansible.builtin.set_fact:
+            bojiboji_node_line: "{{ bojiboji_checksums.content.splitlines() | select('search', ' node-v22[.][0-9]+[.][0-9]+-linux-' ~ bojiboji_arches[ansible_architecture] ~ '[.]tar[.]xz$') | first }}"
+
+        - name: Set runtime artifact values
+          ansible.builtin.set_fact:
+            bojiboji_node_archive: "{{ bojiboji_node_line.split()[-1] }}"
+            bojiboji_node_checksum: "{{ bojiboji_node_line.split()[0] }}"
+
+        - name: Download verified Node.js archive
+          ansible.builtin.get_url:
+            url: "https://nodejs.org/dist/latest-v22.x/{{ bojiboji_node_archive }}"
+            dest: "{{ bojiboji_root }}/downloads/{{ bojiboji_node_archive }}"
+            checksum: "sha256:{{ bojiboji_node_checksum }}"
+            mode: '0644'
+            validate_certs: true
+
+        - name: Extract isolated runtime
+          ansible.builtin.unarchive:
+            src: "{{ bojiboji_root }}/downloads/{{ bojiboji_node_archive }}"
+            dest: "{{ bojiboji_root }}"
+            remote_src: true
+            owner: root
+            group: root
+            creates: "{{ bojiboji_root }}/{{ bojiboji_node_archive | regex_replace('[.]tar[.]xz$', '') }}/bin/node"
+
+        - name: Select installed runtime
+          ansible.builtin.set_fact:
+            bojiboji_node_binary: "{{ bojiboji_root }}/{{ bojiboji_node_archive | regex_replace('[.]tar[.]xz$', '') }}/bin/node"
+
+    - name: Select existing runtime
+      ansible.builtin.set_fact:
+        bojiboji_node_binary: "{{ bojiboji_existing_node }}"
+      when: not (bojiboji_install_node | bool)
+
+    - name: Verify Node.js version
+      ansible.builtin.command:
+        argv: ["{{ bojiboji_node_binary }}", -p, "Number(process.versions.node.split('.')[0]) >= 20"]
+      register: bojiboji_node_check
+      changed_when: false
+      failed_when: bojiboji_node_check.rc != 0 or bojiboji_node_check.stdout != 'true'
+
+    - name: Pull requested repository revision
+      ansible.builtin.git:
+        repo: "{{ bojiboji_repo }}"
+        dest: "{{ bojiboji_root }}/repository"
+        version: "{{ bojiboji_ref }}"
+        update: true
+        force: false
+      register: bojiboji_git
+
+    - name: Set release path
+      ansible.builtin.set_fact:
+        bojiboji_release: "{{ bojiboji_root }}/releases/{{ bojiboji_git.after }}"
+
+    - name: Create release directory
+      ansible.builtin.file:
+        path: "{{ bojiboji_release }}"
+        state: directory
+        mode: '0755'
+
+    - name: Archive exact commit
+      ansible.builtin.command:
+        argv:
+          - git
+          - -C
+          - "{{ bojiboji_root }}/repository"
+          - archive
+          - --format=tar
+          - "--output={{ bojiboji_root }}/downloads/{{ bojiboji_git.after }}.tar"
+          - "{{ bojiboji_git.after }}"
+        creates: "{{ bojiboji_root }}/downloads/{{ bojiboji_git.after }}.tar"
+
+    - name: Extract immutable release
+      ansible.builtin.unarchive:
+        src: "{{ bojiboji_root }}/downloads/{{ bojiboji_git.after }}.tar"
+        dest: "{{ bojiboji_release }}"
+        remote_src: true
+        owner: root
+        group: root
+        creates: "{{ bojiboji_release }}/server.cjs"
+
+    - name: Validate server JavaScript before activation
+      ansible.builtin.command:
+        argv: ["{{ bojiboji_node_binary }}", --check, "{{ bojiboji_release }}/server.cjs"]
+      changed_when: false
+
+    - name: Run gameplay and UI smoke checks before activation
+      ansible.builtin.command:
+        argv: ["{{ bojiboji_node_binary }}", "{{ bojiboji_release }}/tests/{{ item }}.cjs"]
+        chdir: "{{ bojiboji_release }}"
+      loop: [gameplay, ui]
+      changed_when: false
+
+    - name: Inspect previous release link
+      ansible.builtin.stat:
+        path: "{{ bojiboji_root }}/current"
+        follow: false
+      register: bojiboji_previous
+
+    - name: Require current to be a managed symlink
+      ansible.builtin.assert:
+        that: not bojiboji_previous.stat.exists or bojiboji_previous.stat.islnk | default(false)
+        fail_msg: /opt/bojiboji/current already exists as a regular file or directory. Resolve it before deployment.
+
+    - name: Read existing service configuration for rollback
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/bojiboji.service
+      register: bojiboji_old_unit
+      failed_when: false
+
+    - name: Check chosen port on first installation
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ bojiboji_port }}"
+        state: stopped
+        timeout: 2
+      when: not (bojiboji_previous.stat.islnk | default(false))
+
+    - name: Activate and verify release
+      block:
+        - name: Install systemd unit
+          ansible.builtin.template:
+            src: templates/bojiboji.service.j2
+            dest: /etc/systemd/system/bojiboji.service
+            owner: root
+            group: root
+            mode: '0644'
+          register: bojiboji_unit
+
+        - name: Point service at selected release
+          ansible.builtin.file:
+            src: "{{ bojiboji_release }}"
+            dest: "{{ bojiboji_root }}/current"
+            state: link
+            force: true
+          register: bojiboji_active
+
+        - name: Start or restart changed application
+          ansible.builtin.systemd:
+            name: bojiboji
+            enabled: true
+            daemon_reload: "{{ bojiboji_unit.changed }}"
+            state: "{{ 'restarted' if (bojiboji_unit.changed or bojiboji_active.changed) else 'started' }}"
+
+        - name: Verify application health
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ bojiboji_port }}/healthz"
+            return_content: true
+          register: bojiboji_health
+          until: bojiboji_health.status | default(0) == 200 and bojiboji_health.json.app | default('') == 'bojiboji'
+          retries: 15
+          delay: 2
+
+        - name: Verify application landing page
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ bojiboji_port }}/"
+            return_content: true
+          register: bojiboji_page
+          failed_when: "'BOJIBOJI' not in bojiboji_page.content"
+
+      rescue:
+        - name: Restore prior release when available
+          ansible.builtin.file:
+            src: "{{ bojiboji_previous.stat.lnk_source }}"
+            dest: "{{ bojiboji_root }}/current"
+            state: link
+            force: true
+          when: bojiboji_previous.stat.islnk | default(false)
+
+        - name: Restore prior service configuration
+          ansible.builtin.copy:
+            content: "{{ bojiboji_old_unit.content | b64decode }}"
+            dest: /etc/systemd/system/bojiboji.service
+            mode: '0644'
+          when: bojiboji_old_unit.content is defined
+
+        - name: Restart previous installation or stop failed first installation
+          ansible.builtin.systemd:
+            name: bojiboji
+            daemon_reload: true
+            state: "{{ 'restarted' if (bojiboji_previous.stat.islnk | default(false) and bojiboji_old_unit.content is defined) else 'stopped' }}"
+
+        - name: Report failed deployment
+          ansible.builtin.fail:
+            msg: Deployment failed. A previous release and service were restored where available; a failed first install was stopped. Inspect journalctl -u bojiboji -n 80.
+
+    - name: Retain previous release link for manual rollback
+      ansible.builtin.file:
+        src: "{{ bojiboji_previous.stat.lnk_source }}"
+        dest: "{{ bojiboji_root }}/previous"
+        state: link
+        force: true
+      when:
+        - bojiboji_previous.stat.islnk | default(false)
+        - bojiboji_previous.stat.lnk_source | default('') != bojiboji_release
+
+    - name: Write Olamidepanel reverse-proxy snippet for review
+      ansible.builtin.template:
+        src: templates/nginx-location.conf.j2
+        dest: /etc/bojiboji/nginx-location.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Show deployment result
+      ansible.builtin.debug:
+        msg:
+          - "Bojiboji revision {{ bojiboji_git.after }} is healthy on 127.0.0.1:{{ bojiboji_port }}."
+          - Add the location from /etc/bojiboji/nginx-location.conf to your chosen domain in Olamidepanel, retaining its TLS settings.
+          - No existing Olamidepanel virtual hosts, certificates, firewall rules or other services were changed.

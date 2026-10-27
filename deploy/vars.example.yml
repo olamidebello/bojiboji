@@ -1,0 +1,10 @@
+---
+bojiboji_repo: https://github.com/olamidebello/bojiboji.git
+bojiboji_ref: main
+bojiboji_port: 3087
+bojiboji_install_node: true
+# When false, set an existing Node.js >=20 executable:
+bojiboji_existing_node: /usr/bin/node
+# Optional public privacy/support contact shown on the legal pages.
+# Use an inbox you control; this value is deliberately public.
+bojiboji_contact_email: ''

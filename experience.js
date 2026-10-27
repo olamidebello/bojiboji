@@ -28,3 +28,6 @@ const invited=new URLSearchParams(location.search).get('room');if(invited&&/^[A-
 
 window.bojiCover=(c,b)=>{c.save();c.fillStyle=window.bojiPalette.highlight;c.globalAlpha=.45;for(let i=0;i<Math.floor(b.w/20);i++){c.beginPath();c.arc(b.x+12+i*20,b.y+18+(i%2)*10,10,0,Math.PI*2);c.fill()}c.globalAlpha=.3;c.strokeStyle='#0a2017';c.lineWidth=2;for(let i=0;i<b.w;i+=24){c.beginPath();c.moveTo(b.x+i,b.y+b.h-8);c.lineTo(b.x+i+12,b.y+b.h-19);c.stroke()}c.restore()};
 $('start').addEventListener('click',()=>{$('arena').scrollIntoView({behavior:$('reduced').checked?'instant':'smooth',block:'center'})});
+
+window.addEventListener('boji-saves-cleared',()=>{personal={games:0,wins:0,hits:0,history:[]};refreshStats()});
+window.addEventListener('storage',e=>{if(e.key==='boji-stats-v1'){personal=readStore(statsKey,{games:0,wins:0,hits:0,history:[]});refreshStats()}});
