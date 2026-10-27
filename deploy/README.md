@@ -79,7 +79,7 @@ Review the policies against your actual hosting and logging practices before pub
 
 The chosen domain is **bojiboji.africandroid.world**, using the existing application backend at `127.0.0.1:3087`.
 
-First create that dedicated domain in Olamidepanel if it does not already exist, point its DNS A record to `154.16.170.86`, and enable the panel's HTTPS certificate. Remove any incorrect AAAA record unless this server is configured for that IPv6 address.
+Point the DNS A record for this domain to `154.16.170.86`. The routing playbook now provisions a missing Nginx virtual host automatically in an already active HTTP include directory. If you already created the dedicated domain through Olamidepanel, its existing host is used instead. A suitable existing certificate is reused when one is available; otherwise the new host serves HTTP until you enable SSL through the panel. Remove any incorrect AAAA record unless this server is configured for that IPv6 address.
 
 Then run on the server:
 
@@ -91,7 +91,7 @@ ansible-playbook -i /root/bojiboji-deploy/deploy/inventory.local.yml \
 
 This separate routing playbook discovers active virtual-host files from `nginx -T`. It modifies only server blocks naming exactly this domain; shared server blocks and unfamiliar server-level rewrite configurations are rejected for manual review. Standard port-80 HTTP-to-HTTPS redirects are retained. Existing TLS certificate directives and other domains remain untouched. The game route uses `location ^~ /` to prevent an old PHP/static handler intercepting game requests, while longer ACME locations are retained. Event-stream buffering/caching are disabled, and `/events` access logs are disabled because its URL carries a temporary room token.
 
-The helper saves original configurations under `/var/backups/bojiboji-domain/`, validates with `nginx -t`, reloads Nginx, and checks the local Host-based HTTP route. Configuration validation, reload, or route-check failure triggers an attempt to restore the saved files and reload the previous configuration. The helper does not install certificates, create DNS records, or bypass the panel to invent an unknown virtual-host layout. A server managed through the panel may regenerate its virtual hosts later; keep the resulting proxy settings in the panel's domain configuration too.
+The helper saves original configurations under `/var/backups/bojiboji-domain/`, validates with `nginx -t`, reloads Nginx, and checks the local Host-based HTTP route. Configuration validation, reload, or route-check failure triggers an attempt to restore the saved files and reload the previous configuration. The helper does not issue certificates or create DNS records. For missing domains it adds an isolated Nginx configuration in an existing HTTP include directory discovered from the active configuration; it does not create a panel database record or replace the main nginx.conf. If no suitable active include exists, it stops rather than inventing a global layout. A server managed through the panel may regenerate its virtual hosts later; keep the resulting proxy settings in the panel's domain configuration too.
 
 If the panel uses a custom Nginx binary or service, pass `-e bojiboji_nginx_binary=/actual/path/to/nginx` and `-e bojiboji_nginx_service=ACTUAL_SERVICE`. The defaults are `/usr/sbin/nginx` and `nginx`.
 
@@ -104,3 +104,17 @@ curl --fail https://bojiboji.africandroid.world/healthz
 Expect `{"ok":true,"app":"bojiboji"}`. This HTTPS check verifies public DNS, TLS, and routing; a local HTTP redirect check alone does not verify them.
 
 Routing-helper checks: `python3 tests/test_domain.py` covers isolation of other domains, TLS/ACME preservation, redirects, quoted braces, repeated runs, and refusal of ambiguous configurations. These checks do not substitute for running against your actual panel installation.
+
+### Missing-domain repair
+
+The previous error `Create bojiboji.africandroid.world as a dedicated domain...` meant no exact domain entry was present in the active Nginx configuration. The routing playbook now passes `--provision-missing` during both discovery and apply. It creates only a uniquely named domain file, refuses to overwrite a conflicting file, and removes a newly created file if validation or the local route check fails.
+
+A certificate is reused only if OpenSSL confirms that its hostname matches and it remains valid for at least 24 hours. The key remains in its existing file. If no certificate matches, the result is explicitly HTTP-only; the script does not claim HTTPS is working. After panel-managed certificate setup, verify HTTPS publicly with curl. Do not create a second duplicate panel virtual host without first reconciling the managed domain file.
+
+For a local route check independent of DNS:
+
+```bash
+curl --fail -H 'Host: bojiboji.africandroid.world' http://127.0.0.1/healthz
+```
+
+A successful HTTP health response is not a check of the public DNS or SSL certificate.

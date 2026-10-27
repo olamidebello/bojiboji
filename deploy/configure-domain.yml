@@ -33,6 +33,7 @@
           - "{{ bojiboji_domain }}"
           - --nginx
           - "{{ bojiboji_nginx_binary }}"
+          - --provision-missing
           - --service
           - "{{ bojiboji_nginx_service }}"
       register: bojiboji_domain_plan
@@ -47,6 +48,7 @@
           - "{{ bojiboji_domain }}"
           - --nginx
           - "{{ bojiboji_nginx_binary }}"
+          - --provision-missing
           - --service
           - "{{ bojiboji_nginx_service }}"
           - --apply
@@ -68,5 +70,6 @@
     - name: Show next check
       ansible.builtin.debug:
         msg:
-          - "Domain routing updated for {{ bojiboji_domain }}. Existing TLS directives were retained."
+          - "Domain routing updated for {{ bojiboji_domain }}; existing sites and TLS directives were preserved."
+          - "{{ 'New domain created. A matching existing certificate was reused.' if ((bojiboji_domain_result.stdout | from_json).tls_reused | default(false)) else 'If HTTPS is not already configured, enable its certificate in Olamidepanel; the game HTTP route is available.' }}"
           - "Visit https://{{ bojiboji_domain }}/healthz after DNS points to this server and the panel has issued its TLS certificate."

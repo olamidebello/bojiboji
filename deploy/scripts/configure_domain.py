@@ -3,6 +3,7 @@
 import argparse
 import datetime
 import hashlib
+import fnmatch
 import http.client
 from urllib.parse import urlsplit
 import json
@@ -120,6 +121,72 @@ def verify_route(domain):
     finally:
         connection.close()
 
+
+def config_sections(dump):
+    headings=list(re.finditer(r'^# configuration file (/.+):\s*$',dump,re.M))
+    return [(h.group(1),dump[h.end():headings[i+1].start() if i+1<len(headings) else len(dump)]) for i,h in enumerate(headings)]
+
+
+def reusable_certificate(dump,domain):
+    candidates=[(Path('/etc/letsencrypt/live')/domain/'fullchain.pem',Path('/etc/letsencrypt/live')/domain/'privkey.pem')]
+    for _,text in config_sections(dump):
+        for node in blocks(text):
+            certs=[d[1] for d in node['directives'] if len(d)==2 and d[0]=='ssl_certificate']
+            keys=[d[1] for d in node['directives'] if len(d)==2 and d[0]=='ssl_certificate_key']
+            if len(certs)==len(keys)==1:
+                candidates.append((Path(certs[0]),Path(keys[0])))
+    for cert,key in candidates:
+        if not cert.is_absolute() or not key.is_absolute() or not cert.is_file() or not key.is_file():
+            continue
+        try:
+            match=command(['openssl','x509','-in',str(cert),'-noout','-checkhost',domain])
+            if 'does match certificate' not in match.stdout:
+                continue
+            command(['openssl','x509','-in',str(cert),'-noout','-checkend','86400'])
+        except (RuntimeError,OSError):
+            continue
+        return cert,key
+    return None
+
+
+def provision_missing(dump,domain,snippet):
+    directories=[]
+    filename='bojiboji-'+domain+'.conf'
+    for _,text in config_sections(dump):
+        for node in blocks(text):
+            if node['head']!=['http']:
+                continue
+            for directive in node['directives']:
+                if len(directive)!=2 or directive[0]!='include':
+                    continue
+                pattern=Path(directive[1])
+                if '$' in str(pattern) or not pattern.is_absolute() or not pattern.parent.is_dir():
+                    continue
+                if '*' not in pattern.name or not fnmatch.fnmatchcase(filename,pattern.name):
+                    continue
+                directories.append(pattern.parent.resolve())
+    if not directories:
+        raise ValueError('No active writable-style http-context include directory was found in nginx -T; create the domain in Olamidepanel or provide its existing virtual host first')
+    # Use a standard conf.d directory when available; otherwise use the active panel include.
+    directories.sort(key=lambda p:(p.name!='conf.d',str(p)))
+    target=directories[0]/filename
+    if target.exists() or target.is_symlink():
+        raise ValueError('Refusing to overwrite an existing unrelated configuration: '+str(target))
+    tls=reusable_certificate(dump,domain)
+    game=snippet.replace('location / {','location ^~ / {',1)
+    header='# Managed Bojiboji domain. Source: deploy/configure-domain.yml\n'
+    if tls:
+        def quote(path):
+            value=str(path)
+            if '\n' in value or '\r' in value:
+                raise ValueError('Invalid certificate path')
+            return '"'+value.replace('\\','\\\\').replace('"','\\"')+'"'
+        text=(header+'server {\n    listen 80;\n    server_name '+domain+';\n    return 301 https://'+domain+'$request_uri;\n}\n'
+              +'server {\n    listen 443 ssl;\n    server_name '+domain+';\n    ssl_certificate '+quote(tls[0])+';\n    ssl_certificate_key '+quote(tls[1])+';\n    ssl_protocols TLSv1.2 TLSv1.3;\n'+game+'\n}\n')
+    else:
+        text=header+'# HTTP only: enable a certificate in the panel before using HTTPS.\nserver {\n    listen 80;\n    server_name '+domain+';\n'+game+'\n}\n'
+    return target,text,bool(tls)
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--domain',default='bojiboji.africandroid.world')
@@ -127,6 +194,7 @@ def main():
     parser.add_argument('--nginx',default=shutil.which('nginx') or '/usr/sbin/nginx')
     parser.add_argument('--service',default='nginx')
     parser.add_argument('--apply',action='store_true')
+    parser.add_argument('--provision-missing',action='store_true',help='Create an isolated domain file in an already active http include directory')
     args=parser.parse_args()
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?',args.domain):
         raise ValueError('Use a lowercase domain name, without a scheme or path')
@@ -147,11 +215,18 @@ def main():
         routed+=routes
         if routes and updated!=original:
             updates[target]=(original,updated)
+    provisioned=False
+    tls_reused=False
     if not matched:
-        raise ValueError('Create '+args.domain+' as a dedicated domain in Olamidepanel first, then rerun this command')
+        if not args.provision_missing:
+            raise ValueError('Create '+args.domain+' in Olamidepanel first, or rerun with --provision-missing')
+        target,text,tls_reused=provision_missing(dump,args.domain,snippet)
+        updates[target]=(None,text)
+        provisioned=True
+        routed=1
     if not routed:
         raise ValueError('Only redirect blocks were found. Finish the domain/TLS setup in the panel first')
-    plan={'domain':args.domain,'files':[str(p) for p in updates],'changed':bool(updates),'applied':False}
+    plan={'domain':args.domain,'files':[str(p) for p in updates],'changed':bool(updates),'applied':False,'provisioned':provisioned,'tls_reused':tls_reused}
     if not args.apply or not updates:
         print(json.dumps(plan));return
     if os.geteuid()!=0:
@@ -161,13 +236,18 @@ def main():
     backup=Path('/var/backups/bojiboji-domain')/stamp
     backup.mkdir(parents=True,mode=0o700)
     for p,(original,updated) in updates.items():
-        shutil.copy2(p,backup/(hashlib.sha256(str(p).encode()).hexdigest()+'.conf'))
-    (backup/'manifest.json').write_text(json.dumps({str(p):hashlib.sha256(str(p).encode()).hexdigest()+'.conf' for p in updates},indent=2))
+        if original is not None:
+            shutil.copy2(p,backup/(hashlib.sha256(str(p).encode()).hexdigest()+'.conf'))
+    (backup/'manifest.json').write_text(json.dumps({str(p):hashlib.sha256(str(p).encode()).hexdigest()+'.conf' if original is not None else None for p,(original,_) in updates.items()},indent=2))
+    written=[]
     try:
         for p,(original,updated) in updates.items():
             # Preserve ownership/mode of the panel-managed file.
-            with p.open('w') as f:
+            with p.open('x' if original is None else 'w') as f:
+                written.append(p)
                 f.write(updated)
+            if original is None:
+                p.chmod(0o644)
         command([args.nginx,'-t'])
         command(['systemctl','reload',args.service])
         for attempt in range(10):
@@ -179,8 +259,12 @@ def main():
                     raise
                 time.sleep(0.5)
     except Exception:
-        for p in updates:
-            shutil.copyfile(backup/(hashlib.sha256(str(p).encode()).hexdigest()+'.conf'),p)
+        for p in written:
+            original=updates[p][0]
+            if original is None:
+                p.unlink(missing_ok=True)
+            else:
+                shutil.copyfile(backup/(hashlib.sha256(str(p).encode()).hexdigest()+'.conf'),p)
         command([args.nginx,'-t'])
         command(['systemctl','reload',args.service])
         raise
