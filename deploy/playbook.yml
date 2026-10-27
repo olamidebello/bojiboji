@@ -156,7 +156,7 @@
       ansible.builtin.command:
         argv: ["{{ bojiboji_node_binary }}", "{{ bojiboji_release }}/tests/{{ item }}.cjs"]
         chdir: "{{ bojiboji_release }}"
-      loop: [gameplay, ui]
+      loop: [gameplay, ui, localization]
       changed_when: false
 
     - name: Inspect previous release link

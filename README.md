@@ -72,3 +72,22 @@ Privacy text was matched to the application's current data flow. Reference: [FTC
 Additional checks: `node tests/privacy.cjs` and `node tests/privacy-server.cjs`.
 
 Public domain: **bojiboji.africandroid.world**. After creating the dedicated domain in Olamidepanel, use `deploy/configure-domain.yml` to connect it to the already deployed backend. See the domain section in `deploy/README.md`.
+
+## Nigerian Pidgin default language
+
+The game opens in Nigerian Pidgin (`pcm`) by default, including its initial HTML. The language selector offers **Naija Pidgin** and **English**, and remembers a deliberate choice in `boji-language-v1` browser storage. Browser language detection does not override the Pidgin default. Clearing saved game data removes the saved choice and restores Pidgin. Switching also works when browser storage is unavailable.
+
+Menus, rules, touch-control labels, lobby controls, match announcements, hiding-spot tools, result messages, common server errors, and new match-history entries are localized. Names, uploaded descriptions, pictures, room codes, gameplay rules and shared match state are not translated or changed. Match events use stable templates and values so each participant renders messages in their own selected language. The formal legal documents remain explicitly marked as English and have a clearly labelled Pidgin summary.
+
+`locales/pcm.js` is the editable translation catalog; `i18n.js` handles static text, accessibility labels, interpolation, live switching, storage and fallback behavior. Unknown messages retain their original text. This is written Nigerian Pidgin, not a claim to cover every Nigerian language or community dialect. No translated voice recordings are included. Embedded artwork retains its original branding.
+
+Checks: `node tests/localization.cjs` and `node tests/ui.cjs --pidgin`. Deployment also runs the localization checks before activation.
+
+Deploy this update:
+
+```bash
+git -C /root/bojiboji-deploy pull --ff-only
+bash /root/bojiboji-deploy/deploy/deploy-local.sh
+```
+
+Reload the game page afterward. The application restart ends active room sessions. Established Nginx routing does not need to change for this language update.
