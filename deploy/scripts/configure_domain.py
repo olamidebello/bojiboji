@@ -83,6 +83,13 @@ def rewrite(text, domain, snippet):
             if http_only and all(d[0] == 'return' and len(d)>2 and d[1] in ['301','302','307','308'] and d[2].startswith('https://') for d in returns):
                 continue  # Keep the panel's HTTP-to-HTTPS redirect.
             raise ValueError('Domain has a server-level return/rewrite. Adjust routing in the panel first')
+        listeners=[d for d in server['directives'] if d and d[0]=='listen']
+        only_http=bool(listeners) and all(len(d)>1 and listen_key(d[1]) and listen_key(d[1])[1]==80 for d in listeners)
+        roots=[n for n in server['children'] if n['head'] in [['location','/'],['location','^~','/']]]
+        if only_http and len(roots)==1 and not roots[0]['children']:
+            directives=roots[0]['directives']
+            if len(directives)==1 and len(directives[0])>2 and directives[0][0]=='return' and directives[0][1] in ['301','302','307','308'] and directives[0][2].startswith('https://'):
+                continue  # Preserve an ACME-compatible HTTPS redirect location.
         routed += 1
         existing=[n for n in server['children'] if n['head'] in [['location','/'],['location','^~','/'],['location','=','/events']]]
         if len(existing)==len(desired) and all(desired.get(tuple(n['head']))==[t[0] for t in tokens(text[n['start']:n['end']])] for n in existing):

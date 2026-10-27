@@ -112,3 +112,5 @@ bash /root/bojiboji-deploy/deploy/deploy-local.sh
 Run `node tests/mobile.cjs` for installation-flow, route, service-worker and cache-isolation integration checks. `node tests/mobile-static.cjs` validates distributable files/icons and is also run before deployment activation. The service-worker cache has a versioned `bojiboji-shell-` prefix; bump it when changing its precache list. Updates wait until existing clients close or the user selects Update app (reload), rather than automatically interrupting a match.
 
 Installation references: https://web.dev/learn/pwa/installation-prompt and https://support.apple.com/guide/iphone/iphea86e5236/ios
+
+For a browser certificate-name warning on the public domain, use `deploy/repair-ssl.yml`. It can request a domain-specific certificate, repair the HTTPS virtual host, preserve existing sites, and verify the trusted public `/healthz` route. See the SSL repair section in `deploy/README.md`.

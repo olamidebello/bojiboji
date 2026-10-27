@@ -1,0 +1,98 @@
+---
+- name: Repair Bojiboji domain certificate and HTTPS routing
+  hosts: olamidepanel
+  become: true
+  gather_facts: false
+  vars:
+    bojiboji_domain: bojiboji.africandroid.world
+    bojiboji_port: 3087
+    bojiboji_nginx_binary: /usr/sbin/nginx
+    bojiboji_nginx_service: nginx
+    bojiboji_acme_email: ''
+  tasks:
+    - name: Validate domain and service settings
+      ansible.builtin.assert:
+        that:
+          - bojiboji_domain is match('^[a-z0-9][a-z0-9.-]*[a-z0-9]$')
+          - bojiboji_nginx_service is match('^[A-Za-z0-9@_.-]+$')
+          - bojiboji_nginx_binary.startswith('/')
+
+    - name: Check game backend before certificate work
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ bojiboji_port }}/healthz"
+        return_content: true
+      register: bojiboji_ssl_health
+      failed_when: bojiboji_ssl_health.json.app | default('') != 'bojiboji'
+
+    - name: Install certificate prerequisites
+      ansible.builtin.apt:
+        name: [certbot, openssl, ca-certificates]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure helper directory exists
+      ansible.builtin.file:
+        path: /etc/bojiboji
+        state: directory
+        mode: '0755'
+
+    - name: Copy SSL helpers
+      ansible.builtin.copy:
+        src: "scripts/{{ item }}"
+        dest: "/etc/bojiboji/{{ item }}"
+        owner: root
+        group: root
+        mode: '0700'
+      loop: [configure_domain.py, repair_ssl.py]
+
+    - name: Repair HTTPS and verify trusted certificate and game route
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /etc/bojiboji/repair_ssl.py
+          - --domain
+          - "{{ bojiboji_domain }}"
+          - --nginx
+          - "{{ bojiboji_nginx_binary }}"
+          - --service
+          - "{{ bojiboji_nginx_service }}"
+          - --email
+          - "{{ bojiboji_acme_email }}"
+      register: bojiboji_ssl_result
+      changed_when: bojiboji_ssl_result.rc == 0 and ((bojiboji_ssl_result.stdout | default('{}', true) | from_json).changed | default(false) | bool)
+
+    - name: Ensure certificate deploy-hook directory exists
+      ansible.builtin.file:
+        path: /etc/letsencrypt/renewal-hooks/deploy
+        state: directory
+        mode: '0755'
+
+    - name: Install reload hook for Bojiboji certificates
+      ansible.builtin.copy:
+        dest: "/etc/letsencrypt/renewal-hooks/deploy/bojiboji-{{ bojiboji_domain }}"
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          set -eu
+          for name in ${RENEWED_DOMAINS:-}; do
+            case "$name" in
+              {{ bojiboji_domain }}|'*.{{ bojiboji_domain.split('.', 1)[1] }}')
+                {{ bojiboji_nginx_binary | quote }} -t
+                systemctl reload {{ bojiboji_nginx_service | quote }}
+                exit 0
+                ;;
+            esac
+          done
+
+    - name: Enable certificate renewal timer
+      ansible.builtin.systemd:
+        name: certbot.timer
+        enabled: true
+        state: started
+
+    - name: Show successful HTTPS verification
+      ansible.builtin.debug:
+        msg: "Trusted HTTPS and Bojiboji health verified at https://{{ bojiboji_domain }}/healthz. Open the site again in your browser."

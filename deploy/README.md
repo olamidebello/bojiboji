@@ -146,3 +146,28 @@ curl --fail -H 'Host: bojiboji.africandroid.world' http://154.16.170.86/healthz
 ```
 
 HTTP-only installations should return the Bojiboji JSON health response. If a matching existing certificate was reused, a redirect to the same Bojiboji HTTPS hostname is expected instead; verify `https://bojiboji.africandroid.world/healthz` to check the final HTTPS route and certificate.
+
+## Repair NET::ERR_CERT_COMMON_NAME_INVALID
+
+A browser showing this error for `bojiboji.africandroid.world` received a certificate that does not cover that hostname. A working backend or an HTTP redirect is not proof of valid HTTPS. Use the dedicated repair playbook on the Olamidepanel server:
+
+```bash
+git -C /root/bojiboji-deploy pull --ff-only
+ansible-playbook -i /root/bojiboji-deploy/deploy/inventory.local.yml \
+  /root/bojiboji-deploy/deploy/repair-ssl.yml
+curl --fail https://bojiboji.africandroid.world/healthz
+```
+
+DNS A/AAAA records must lead to this server, and public ports 80 and 443 must be reachable. The playbook installs Certbot, OpenSSL and CA certificates. It checks the existing game backend first. It only rewrites server blocks that name this exact domain; shared server blocks and unrelated content in the dedicated destination file are rejected rather than overwritten. Other virtual hosts are preserved. The matching HTTP and HTTPS hosts join existing address-specific listener groups to prevent another site's default certificate from being served.
+
+The helper first looks for an existing certificate with the correct hostname, a trusted chain, and at least 24 hours of validity. Otherwise it configures a dedicated ACME webroot exception, verifies a random test file through local and public HTTP routing, and requests a domain-specific Let's Encrypt certificate with Certbot's webroot authenticator. Certbot is not permitted to rewrite arbitrary Nginx configurations or stop the web server. This operation uses Certbot's `--agree-tos` for certificate issuance. It registers without an email unless you provide `-e bojiboji_acme_email=YOUR-EMAIL`; no email address is invented or taken from unrelated account data. An existing certificate and its private key are referenced in place; key contents are never printed or uploaded to GitHub.
+
+The final checks use normal trusted TLS, certificate hostname validation, and SNI against local listener groups and the real public hostname, followed by a Bojiboji `/healthz` check. No certificate-validation bypass or self-signed placeholder is used. Failure triggers an attempt to restore the prior domain files from `/var/backups/bojiboji-ssl/` and reload the previous configuration. Newly issued certificate files remain on the server even if a later route check fails; the script does not revoke or delete credentials automatically. The game backend is not restarted by this playbook.
+
+The playbook enables `certbot.timer` and adds a domain-specific Nginx validation/reload deploy hook for renewals. If an existing certificate belongs to another certificate manager, that manager remains responsible for its renewal. Keep the resulting domain settings in the panel if it regenerates virtual-host files later.
+
+After success, reload the site normally and revisit `/install`; browser app installation requires trusted HTTPS. Do not bypass the browser certificate warning. Public DNS/CDN configuration can still need correction if traffic is routed away from this server.
+
+Validation: `python3 tests/test_ssl.py` includes real local TLS handshakes for matching trusted certificates, rejected hostname mismatches and rejected untrusted chains, plus scoped rendering, ACME routing, rollback and repeat-run checks. `python3 tests/test_domain.py` covers the shared address-group layout seen in the server's diagnostic output. Syntax checks are not a live certificate issuance.
+
+Primary reference for the webroot and renewal workflow: https://eff-certbot.readthedocs.io/en/stable/using.html
