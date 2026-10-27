@@ -4,6 +4,7 @@ import argparse
 import datetime
 import hashlib
 import fnmatch
+import ipaddress
 import http.client
 from urllib.parse import urlsplit
 import json
@@ -104,6 +105,17 @@ def command(args):
 
 
 
+class DeploymentError(RuntimeError):
+    def __init__(self,message,**details):
+        super().__init__(message)
+        self.details=details
+
+
+def safe_location(value):
+    # The health-check request has no credentials; do not print any redirect query.
+    return value.split('?',1)[0].split('#',1)[0][:300]
+
+
 def verify_route(domain):
     connection=http.client.HTTPConnection('127.0.0.1',80,timeout=8)
     try:
@@ -115,7 +127,7 @@ def verify_route(domain):
         elif response.status in [301,302,307,308]:
             destination=urlsplit(response.getheader('Location',''))
             if destination.scheme!='https' or destination.hostname!=domain:
-                raise RuntimeError('Domain redirected somewhere unexpected')
+                raise RuntimeError('Domain route at 127.0.0.1:80 returned HTTP '+str(response.status)+' redirect to '+safe_location(response.getheader('Location',''))+' instead of HTTPS for '+domain)
         else:
             raise RuntimeError('Domain health request returned HTTP '+str(response.status))
     finally:
@@ -187,6 +199,54 @@ def provision_missing(dump,domain,snippet):
         text=header+'# HTTP only: enable a certificate in the panel before using HTTPS.\nserver {\n    listen 80;\n    server_name '+domain+';\n'+game+'\n}\n'
     return target,text,bool(tls)
 
+
+def diagnose(dump,domain,nginx,service):
+    servers=[]
+    includes=[]
+    addresses={'127.0.0.1'}
+    for source,text in config_sections(dump):
+        for node in blocks(text):
+            if node['head']==['http']:
+                includes.extend(d[1] for d in node['directives'] if len(d)==2 and d[0]=='include')
+            if node['head']!=['server']:
+                continue
+            names=[name for d in node['directives'] if d and d[0]=='server_name' for name in d[1:]]
+            listeners=[d[1:] for d in node['directives'] if d and d[0]=='listen']
+            relevant=[]
+            for listener in listeners:
+                if not listener:continue
+                address=listener[0]
+                if address=='80' or address.endswith(':80'):
+                    relevant.append(listener)
+                    candidate=address.rsplit(':',1)[0].strip('[]')
+                    try:
+                        ip=ipaddress.ip_address(candidate)
+                        if ip.version==4 and not ip.is_unspecified:addresses.add(str(ip))
+                    except ValueError:pass
+            if relevant or domain in names:
+                servers.append({'source':source,'names':names,'listen':listeners,'returns':[safe_location(' '.join(d[1:])) for d in node['directives'] if d and d[0]=='return']})
+    # Use only configured/local server addresses, never resolve the domain to an external host.
+    try:
+        info=json.loads(command(['ip','-j','-4','address','show']).stdout)
+        for interface in info:
+            for addr in interface.get('addr_info',[]):
+                if addr.get('scope')=='global' and addr.get('local'):addresses.add(addr['local'])
+    except (OSError,RuntimeError,ValueError):pass
+    probes=[]
+    for address in sorted(addresses)[:10]:
+        connection=http.client.HTTPConnection(address,80,timeout=2)
+        try:
+            connection.request('GET','/healthz',headers={'Host':domain})
+            response=connection.getresponse();payload=response.read(2048)
+            try:app=json.loads(payload).get('app')
+            except (ValueError,AttributeError):app=None
+            probes.append({'address':address,'status':response.status,'location':safe_location(response.getheader('Location','')),'app':app})
+        except (OSError,http.client.HTTPException) as e:probes.append({'address':address,'error':str(e)[:200]})
+        finally:connection.close()
+    try:unit=command(['systemctl','show',service,'--property=ExecStart','--value']).stdout.strip()
+    except (OSError,RuntimeError) as e:unit=str(e)
+    return {'domain':domain,'mode':'read-only diagnosis','nginx':nginx,'service_exec_start':unit,'http_includes':includes,'servers':servers[:40],'server_count':len(servers),'probes':probes}
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--domain',default='bojiboji.africandroid.world')
@@ -194,11 +254,14 @@ def main():
     parser.add_argument('--nginx',default=shutil.which('nginx') or '/usr/sbin/nginx')
     parser.add_argument('--service',default='nginx')
     parser.add_argument('--apply',action='store_true')
+    parser.add_argument('--diagnose',action='store_true',help='Read listener configuration and probe local routes without modifying files')
     parser.add_argument('--provision-missing',action='store_true',help='Create an isolated domain file in an already active http include directory')
     args=parser.parse_args()
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?',args.domain):
         raise ValueError('Use a lowercase domain name, without a scheme or path')
     dump=command([args.nginx,'-T']).stdout
+    if args.diagnose:
+        print(json.dumps(diagnose(dump,args.domain,args.nginx,args.service),indent=2));return
     snippet=Path(args.snippet).read_text()
     if '127.0.0.1:' not in snippet or 'location = /events' not in snippet:
         raise ValueError('Run the application deployment first to generate its proxy snippet')
@@ -258,16 +321,19 @@ def main():
                 if attempt == 9:
                     raise
                 time.sleep(0.5)
-    except Exception:
-        for p in written:
-            original=updates[p][0]
-            if original is None:
-                p.unlink(missing_ok=True)
-            else:
-                shutil.copyfile(backup/(hashlib.sha256(str(p).encode()).hexdigest()+'.conf'),p)
-        command([args.nginx,'-t'])
-        command(['systemctl','reload',args.service])
-        raise
+    except Exception as exc:
+        try:
+            for p in written:
+                original=updates[p][0]
+                if original is None:
+                    p.unlink(missing_ok=True)
+                else:
+                    shutil.copyfile(backup/(hashlib.sha256(str(p).encode()).hexdigest()+'.conf'),p)
+            command([args.nginx,'-t'])
+            command(['systemctl','reload',args.service])
+        except Exception as restore_error:
+            raise DeploymentError(str(exc)+'; rollback also failed: '+str(restore_error),changed=bool(written),applied=False,rolled_back=False,backup=str(backup)) from exc
+        raise DeploymentError(str(exc),changed=False,applied=False,rolled_back=True,backup=str(backup)) from exc
     plan.update(applied=True,backup=str(backup))
     print(json.dumps(plan))
 
@@ -276,5 +342,6 @@ if __name__=='__main__':
     try:
         main()
     except (ValueError,RuntimeError,OSError) as exc:
+        print(json.dumps({'ok':False,'changed':False,'applied':False,'error':str(exc),**getattr(exc,'details',{})}))
         print(str(exc),file=sys.stderr)
         sys.exit(1)

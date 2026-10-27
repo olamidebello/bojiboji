@@ -3,9 +3,11 @@ from pathlib import Path
 import unittest
 import tempfile
 import subprocess
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import io
 import contextlib
+import json
+import sys
 from types import SimpleNamespace
 spec=importlib.util.spec_from_file_location('configure_domain',Path(__file__).resolve().parents[1]/'deploy/scripts/configure_domain.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
@@ -84,4 +86,26 @@ class ProvisionRollbackTests(unittest.TestCase):
      with self.assertRaises(RuntimeError):m.main()
     self.assertFalse((confdir/('bojiboji-'+D+'.conf')).exists())
     self.assertIn('include',main.read_text());self.assertGreaterEqual(len(checks),2)
+class RoutingDiagnosticsTests(unittest.TestCase):
+ def test_redirect_failure_names_destination_without_its_query(self):
+  response=MagicMock();response.status=302;response.getheader.return_value='https://panel.example/login?temporary=secret'
+  connection=MagicMock();connection.getresponse.return_value=response
+  with patch.object(m.http.client,'HTTPConnection',return_value=connection):
+   with self.assertRaises(RuntimeError) as caught:m.verify_route(D)
+  self.assertIn('https://panel.example/login',str(caught.exception));self.assertNotIn('secret',str(caught.exception));connection.close.assert_called_once()
+ def test_error_output_is_valid_json(self):
+  script=Path(__file__).resolve().parents[1]/'deploy/scripts/configure_domain.py'
+  p=subprocess.run([sys.executable,str(script),'--domain','bad/name'],capture_output=True,text=True)
+  self.assertEqual(p.returncode,1);self.assertFalse(json.loads(p.stdout)['changed']);self.assertIn('domain',p.stderr)
+ def test_diagnosis_separates_listener_addresses_without_mutation(self):
+  dump=f'# configuration file /etc/nginx/nginx.conf:\nhttp {{ include /etc/nginx/conf.d/*.conf; }}\n# configuration file /etc/nginx/sites-enabled/panel:\nserver {{ listen 127.0.0.1:80; server_name panel.example; return 302 https://panel.example/login; }}\nserver {{ listen 154.16.170.86:80; server_name {D}; }}'
+  def mock_command(args):
+   if args[0]=='ip':return SimpleNamespace(stdout='[]')
+   if args[0]=='systemctl':return SimpleNamespace(stdout='/usr/sbin/nginx -c /etc/nginx/nginx.conf')
+   raise AssertionError('Unexpected command '+str(args))
+  response=MagicMock();response.status=200;response.read.return_value=b'{"app":"bojiboji"}';response.getheader.return_value=''
+  connection=MagicMock();connection.getresponse.return_value=response
+  with patch.object(m,'command',side_effect=mock_command),patch.object(m.http.client,'HTTPConnection',return_value=connection):
+   result=m.diagnose(dump,D,'/usr/sbin/nginx','nginx')
+  self.assertEqual({p['address'] for p in result['probes']},{'127.0.0.1','154.16.170.86'});self.assertEqual(result['server_count'],2);self.assertEqual(result['mode'],'read-only diagnosis')
 if __name__=='__main__':unittest.main()

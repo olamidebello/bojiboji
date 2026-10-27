@@ -53,7 +53,7 @@
           - "{{ bojiboji_nginx_service }}"
           - --apply
       register: bojiboji_domain_result
-      changed_when: (bojiboji_domain_result.stdout | from_json).changed | bool
+      changed_when: bojiboji_domain_result.rc == 0 and ((bojiboji_domain_result.stdout | default('{}', true) | from_json).changed | default(false) | bool)
 
     - name: Verify local domain route through Nginx
       ansible.builtin.uri:

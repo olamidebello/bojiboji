@@ -118,3 +118,16 @@ curl --fail -H 'Host: bojiboji.africandroid.world' http://127.0.0.1/healthz
 ```
 
 A successful HTTP health response is not a check of the public DNS or SSL certificate.
+
+### Unexpected redirect during route verification
+
+If local route verification reports a redirect to a different hostname, the backend can still be healthy while an Nginx listener or another virtual host handles the domain request. The helper reports the redirect's actual destination without its query string, attempts rollback, and emits structured JSON describing whether rollback succeeded. Ansible no longer tries to decode empty stdout on command failure.
+
+Before another routing change, run this read-only diagnostic:
+
+```bash
+git -C /root/bojiboji-deploy pull --ff-only
+python3 /root/bojiboji-deploy/deploy/scripts/configure_domain.py --diagnose
+```
+
+It lists the active HTTP listener groups, virtual-host names and configuration paths, checks `/healthz` with the chosen Host header on local/configured IPv4 addresses, and shows the Nginx service's ExecStart. It does not edit files, reload services, resolve the public domain to arbitrary remote hosts, or print TLS private-key contents. The diagnostic does not claim a repair has occurred; use its output to identify the actual listener or redirect mismatch.
