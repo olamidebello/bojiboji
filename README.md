@@ -33,3 +33,26 @@ Each user can save a spot name, description, manual location label, field positi
 ## Multiplayer validation
 
 Integration checks covered two separate sessions, host-only start authorization, valid and blocked spot coordinates, SSE profile sharing, rejecting mid-match joins, movement input, static assets, and leaving a room. Core simulation checks covered toss, hide, hit transfer, round elimination, final winner, and pause. Browser visual and real-device tests remain pending.
+
+## Expanded game experience
+
+- Original generated Bojiboji logo and village courtyard key art, delivered as optimized WebP assets, with a lightweight SVG favicon.
+- Four animal avatars (fox, cat, owl, bear), richer cover detail, ball-transfer particles, a throw aiming guide, and winner celebrations.
+- Three visual arena themes: Village Grove, Golden Dusk, and Moonlit Courtyard. Theme selection is personal and does not change collision geometry.
+- Optional synthesized sound cues, a final-five-second alert, reduced-effects setting, keyboard focus styles, mobile layout improvements, and full screen where supported.
+- Server-tracked throws, hits, accuracy and final match scoreboard. Personal games, wins, hits and the latest five results are kept on the current browser, not a global leaderboard.
+- Player names, avatars, theme and reduced-effects preference are remembered on the current browser. Shared-device users can clear browser site data to reset these values.
+- Ready-up lobby, invite links containing only the room code, and host removal between matches. Every member must be ready before the host starts. Session tokens are never included in invite links.
+- Controls reset after 500 ms without input to stop disconnected players drifting. Empty matches end cleanly; leaving hosts transfer ownership.
+
+## Checks
+
+From the repository root, run:
+
+```
+node tests/gameplay.cjs
+node tests/multiplayer.cjs
+node tests/ui.cjs
+```
+
+The UI check uses a mock DOM/canvas to exercise script loading, avatars, rendering calls, room controls, invitations and result statistics. It does not replace browser screenshot or mobile-device testing. Those remain pending.
