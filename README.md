@@ -4,7 +4,7 @@
 
 ## Play
 
-Serve this directory with any static web server, for example `python3 -m http.server 8080`, and open http://localhost:8080. No build tools or dependencies are required.
+Run `node server.cjs` with Node.js 20 or newer, then open http://localhost:8080. Set `PORT` to change the port. No npm dependencies or build step are required. For other devices on the same network, use the server computer’s LAN address and port. Public internet play requires hosting this server with HTTPS and a reverse proxy that supports unbuffered server-sent events (`/events`). A static-only host supports local play, but cannot run online rooms.
 
 Choose 3, 5, or 8 total players and 30, 60, or 90 seconds per round. One human plays against local computer opponents; eliminated humans spectate.
 
@@ -19,8 +19,17 @@ WASD / arrows move. Mouse aims, click or Space throws. Touch arrows move and aim
 
 ## Scope
 
-This is a first playable prototype, not an online multiplayer release. AI has basic line-of-sight pursuit and escape behavior. Cover dims hidden runners on the shared board rather than removing them entirely. No accounts, server, live player synchronization, mobile application package, or payment system is included.
+This is a first playable prototype with online rooms for 2–8 human players and a separate local AI mode. Create a room, share the code, and have the host start. Online rooms have no AI players or shared pause. The server owns movement, throws, timers, and elimination. Players cannot join mid-match. Disconnected sessions expire after 45 seconds; expired players are removed and a replacement host is selected. Rooms and profiles exist in memory and disappear on server restart. AI has basic line-of-sight pursuit and escape behavior. Cover dims hidden runners on the shared board rather than removing them entirely. No accounts, persistent storage, native mobile package, or payment system is included. Room codes grant room access; use this prototype with trusted participants.
 
 ## Validation
 
 JavaScript syntax checked with `node --check game.js`. A headless simulation verified start, toss selection, hiding phase, ball transfer, elimination, next round, final winner, and pause. Visual browser and real-device checks remain pending.
+
+
+## Personal hiding spots
+
+Each user can save a spot name, description, manual location label, field position, and optional JPEG/PNG/WebP picture. Pictures are resized in the browser and shared with room members; no GPS is collected. Field positions must be clear of obstacles. Spots are marked on the map and shown as profile cards; they do not create collision cover or teleport users. Save again after joining an online room to share a local profile. Only the owner’s session can edit their profile. Profiles are not permanent.
+
+## Multiplayer validation
+
+Integration checks covered two separate sessions, host-only start authorization, valid and blocked spot coordinates, SSE profile sharing, rejecting mid-match joins, movement input, static assets, and leaving a room. Core simulation checks covered toss, hide, hit transfer, round elimination, final winner, and pause. Browser visual and real-device tests remain pending.
