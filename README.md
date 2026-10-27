@@ -91,3 +91,24 @@ bash /root/bojiboji-deploy/deploy/deploy-local.sh
 ```
 
 Reload the game page afterward. The application restart ends active room sessions. Established Nginx routing does not need to change for this language update.
+
+## Installable mobile app
+
+The game includes an installable **Progressive Web App (PWA)** for supported Android, iPhone/iPad, and desktop browsers. The homepage's **Install / download app** link opens `/install`. The app uses the existing game server and keeps Pidgin as the default language. This release does not include a native APK, IPA, or store listing.
+
+Features include home-screen icons, standalone app display, a manifest, a browser-authorized installation prompt where supported, iPhone/Safari instructions, offline computer-opponent practice after the app shell has cached successfully, and user-triggered updates. The device/browser controls installation; the page never silently installs software. Supported installation and service-worker behavior requires HTTPS (or localhost during development).
+
+Only the known static game pages/assets enter the offline cache. Room APIs, event streams, tokens, public configuration and uploaded profile pictures are excluded. Online rooms always need internet; a disconnected player should leave their online room before starting local practice. Browser quotas or settings can prevent offline storage, and real-device installation remains to be checked after deploying over HTTPS.
+
+Public install page after deployment: https://bojiboji.africandroid.world/install
+
+Deploy:
+
+```bash
+git -C /root/bojiboji-deploy pull --ff-only
+bash /root/bojiboji-deploy/deploy/deploy-local.sh
+```
+
+Run `node tests/mobile.cjs` for installation-flow, route, service-worker and cache-isolation integration checks. `node tests/mobile-static.cjs` validates distributable files/icons and is also run before deployment activation. The service-worker cache has a versioned `bojiboji-shell-` prefix; bump it when changing its precache list. Updates wait until existing clients close or the user selects Update app (reload), rather than automatically interrupting a match.
+
+Installation references: https://web.dev/learn/pwa/installation-prompt and https://support.apple.com/guide/iphone/iphea86e5236/ios

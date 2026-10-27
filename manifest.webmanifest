@@ -1,0 +1,47 @@
+{
+  "id": "/",
+  "name": "Bojiboji — Hide. Hunt. Hit.",
+  "short_name": "Bojiboji",
+  "description": "One ball. Everybody run. Gather your people, hide, dodge ball, win the circle.",
+  "lang": "pcm",
+  "start_url": "/?source=installed",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1720",
+  "theme_color": "#142832",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/assets/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "categories": [
+    "games",
+    "entertainment"
+  ],
+  "shortcuts": [
+    {
+      "name": "Play Bojiboji",
+      "url": "/#setup",
+      "icons": [
+        {
+          "src": "/assets/app-icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Join a room",
+      "url": "/#onlineLobby"
+    }
+  ]
+}

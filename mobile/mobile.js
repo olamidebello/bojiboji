@@ -1,0 +1,17 @@
+'use strict';
+(()=>{
+ const tx=(key)=>window.bojiI18n?.t(key)||key;
+ const byId=id=>document.getElementById(id);
+ let promptEvent=null,registration=null,reloadAfterUpdate=false,installed=Boolean(window.matchMedia?.('(display-mode: standalone)').matches||navigator.standalone),installMessage='',offlineMessage='';
+ const secure=window.isSecureContext===true;
+ function message(key){installMessage=key;render()}
+ function render(){const status=byId('installStatus');if(status)status.textContent=tx(installed?'Bojiboji is installed. Open it from your home screen.':installMessage||'Checking installation options for your device.');const button=byId('installNow');if(button){button.disabled=installed;button.textContent=tx(installed?'Installed':'Install app')}const offline=byId('offlineStatus');if(offline)offline.textContent=tx(offlineMessage);const network=byId('mobileNetwork');if(network)network.textContent=navigator.onLine===false?tx('Offline: use practice mode. Leave any online room first.'):''}
+ window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();promptEvent=event;message('Ready to install. Tap Install app to continue.')});
+ window.addEventListener('appinstalled',()=>{installed=true;promptEvent=null;render()});
+ byId('installNow')?.addEventListener('click',async()=>{if(installed)return;if(!secure){message('Open this site over HTTPS to install the app.');return}if(promptEvent){const event=promptEvent;promptEvent=null;try{await event.prompt();const choice=await event.userChoice;if(choice.outcome==='accepted')message('Installation accepted. Your device will finish installing.');else message('Installation cancelled. You can try again from the browser menu.')}catch{message('Use your browser menu to install or add Bojiboji to your home screen.')}}else{const ios=/iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);message(ios?'In Safari, tap Share, then Add to Home Screen.':'Use your browser menu to install or add Bojiboji to your home screen.');byId(ios?'iosGuide':'androidGuide')?.scrollIntoView({behavior:'smooth',block:'center'})}});
+ byId('updateApp')?.addEventListener('click',()=>{if(registration?.waiting){reloadAfterUpdate=true;registration.waiting.postMessage({type:'ACTIVATE_UPDATE'})}});
+ function offerUpdate(){const button=byId('updateApp');if(button&&registration?.waiting)button.hidden=false}
+ if('serviceWorker' in navigator&&secure){navigator.serviceWorker.addEventListener('controllerchange',()=>{if(reloadAfterUpdate)location.reload()});navigator.serviceWorker.register('/sw.js',{scope:'/'}).then(value=>{registration=value;offerUpdate();registration.addEventListener('updatefound',()=>{const worker=registration.installing;worker?.addEventListener('statechange',()=>{if(worker.state==='installed')offerUpdate()})});return navigator.serviceWorker.ready}).then(()=>{offlineMessage='App files are saved for offline practice. Online rooms still need internet.';render()}).catch(()=>{offlineMessage='Offline files could not be saved. You can still play while online.';render()})}else offlineMessage=secure?'This browser does not support offline app installation.':'Open this site over HTTPS to enable installation and offline practice.';
+ window.addEventListener('online',render);window.addEventListener('offline',render);window.addEventListener('boji-language-changed',render);
+ message(secure?'Use your browser menu to install or add Bojiboji to your home screen.':'Open this site over HTTPS to install the app.');
+})();
