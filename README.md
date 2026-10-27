@@ -70,3 +70,5 @@ Players can delete their own shared hiding profile, leave a room to remove it, a
 Privacy text was matched to the application's current data flow. Reference: [FTC privacy and security guidance](https://www.ftc.gov/business-guidance/privacy-security). This reference is informational, not an endorsement or certification.
 
 Additional checks: `node tests/privacy.cjs` and `node tests/privacy-server.cjs`.
+
+Public domain: **bojiboji.africandroid.world**. After creating the dedicated domain in Olamidepanel, use `deploy/configure-domain.yml` to connect it to the already deployed backend. See the domain section in `deploy/README.md`.

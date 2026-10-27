@@ -1,0 +1,72 @@
+---
+- name: Connect the Bojiboji domain in Olamidepanel
+  hosts: olamidepanel
+  become: true
+  gather_facts: false
+  vars:
+    bojiboji_domain: bojiboji.africandroid.world
+    bojiboji_port: 3087
+    bojiboji_nginx_binary: /usr/sbin/nginx
+    bojiboji_nginx_service: nginx
+  tasks:
+    - name: Check application health before changing domain routing
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ bojiboji_port }}/healthz"
+        return_content: true
+      register: bojiboji_health
+      failed_when: bojiboji_health.json.app | default('') != 'bojiboji'
+
+    - name: Copy routing helper to server
+      ansible.builtin.copy:
+        src: scripts/configure_domain.py
+        dest: /etc/bojiboji/configure_domain.py
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Discover routing changes without modifying virtual hosts
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /etc/bojiboji/configure_domain.py
+          - --domain
+          - "{{ bojiboji_domain }}"
+          - --nginx
+          - "{{ bojiboji_nginx_binary }}"
+          - --service
+          - "{{ bojiboji_nginx_service }}"
+      register: bojiboji_domain_plan
+      changed_when: false
+
+    - name: Apply domain routing with backups and Nginx validation
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /etc/bojiboji/configure_domain.py
+          - --domain
+          - "{{ bojiboji_domain }}"
+          - --nginx
+          - "{{ bojiboji_nginx_binary }}"
+          - --service
+          - "{{ bojiboji_nginx_service }}"
+          - --apply
+      register: bojiboji_domain_result
+      changed_when: (bojiboji_domain_result.stdout | from_json).changed | bool
+
+    - name: Verify local domain route through Nginx
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/healthz"
+        headers:
+          Host: "{{ bojiboji_domain }}"
+        follow_redirects: none
+        status_code: [200, 301, 302, 307, 308]
+      register: bojiboji_domain_http
+      failed_when: >-
+        (bojiboji_domain_http.status == 200 and bojiboji_domain_http.json.app | default('') != 'bojiboji') or
+        (bojiboji_domain_http.status != 200 and not (bojiboji_domain_http.location | default('')).startswith('https://' ~ bojiboji_domain))
+
+    - name: Show next check
+      ansible.builtin.debug:
+        msg:
+          - "Domain routing updated for {{ bojiboji_domain }}. Existing TLS directives were retained."
+          - "Visit https://{{ bojiboji_domain }}/healthz after DNS points to this server and the panel has issued its TLS certificate."

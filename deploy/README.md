@@ -74,3 +74,33 @@ Run `ansible-playbook -i deploy/inventory.local.yml deploy/playbook.yml --syntax
 The site includes Terms and Conditions, a Privacy Policy, and a copyright notice naming Olamide Olatayo Bello. To publish your support/privacy inbox, set `bojiboji_contact_email` in your variables file or deploy with `-e bojiboji_contact_email=YOUR-EMAIL`. The value is intentionally public and must be a plain email address. If unset, legal pages instruct players to request operator contact details from the person who supplied their room invitation. No inbox is invented by the installer.
 
 Review the policies against your actual hosting and logging practices before public operation. The game describes its current implementation; adding tracking, payments, user accounts or persistent uploads requires updating those descriptions. The templates do not assert jurisdiction-wide legal compliance.
+
+## Connect bojiboji.africandroid.world
+
+The chosen domain is **bojiboji.africandroid.world**, using the existing application backend at `127.0.0.1:3087`.
+
+First create that dedicated domain in Olamidepanel if it does not already exist, point its DNS A record to `154.16.170.86`, and enable the panel's HTTPS certificate. Remove any incorrect AAAA record unless this server is configured for that IPv6 address.
+
+Then run on the server:
+
+```bash
+git -C /root/bojiboji-deploy pull --ff-only
+ansible-playbook -i /root/bojiboji-deploy/deploy/inventory.local.yml \
+  /root/bojiboji-deploy/deploy/configure-domain.yml
+```
+
+This separate routing playbook discovers active virtual-host files from `nginx -T`. It modifies only server blocks naming exactly this domain; shared server blocks and unfamiliar server-level rewrite configurations are rejected for manual review. Standard port-80 HTTP-to-HTTPS redirects are retained. Existing TLS certificate directives and other domains remain untouched. The game route uses `location ^~ /` to prevent an old PHP/static handler intercepting game requests, while longer ACME locations are retained. Event-stream buffering/caching are disabled, and `/events` access logs are disabled because its URL carries a temporary room token.
+
+The helper saves original configurations under `/var/backups/bojiboji-domain/`, validates with `nginx -t`, reloads Nginx, and checks the local Host-based HTTP route. Configuration validation, reload, or route-check failure triggers an attempt to restore the saved files and reload the previous configuration. The helper does not install certificates, create DNS records, or bypass the panel to invent an unknown virtual-host layout. A server managed through the panel may regenerate its virtual hosts later; keep the resulting proxy settings in the panel's domain configuration too.
+
+If the panel uses a custom Nginx binary or service, pass `-e bojiboji_nginx_binary=/actual/path/to/nginx` and `-e bojiboji_nginx_service=ACTUAL_SERVICE`. The defaults are `/usr/sbin/nginx` and `nginx`.
+
+After routing and TLS setup, check:
+
+```bash
+curl --fail https://bojiboji.africandroid.world/healthz
+```
+
+Expect `{"ok":true,"app":"bojiboji"}`. This HTTPS check verifies public DNS, TLS, and routing; a local HTTP redirect check alone does not verify them.
+
+Routing-helper checks: `python3 tests/test_domain.py` covers isolation of other domains, TLS/ACME preservation, redirects, quoted braces, repeated runs, and refusal of ambiguous configurations. These checks do not substitute for running against your actual panel installation.
